@@ -297,6 +297,8 @@ header{background:var(--panel);border-bottom:1px solid var(--border);padding:0 1
     <button class="tool-btn icon-btn" id="undoBtn" title="실행 취소 (Ctrl+Z)" style="opacity:.55">↩</button>
     <button class="tool-btn" id="editModeBtn">✏️ 편집</button>
     <button class="tool-btn" id="btnShare" style="background:#1a73e8;color:#fff;border-color:#1a73e8;">🔗 공유용 저장</button>
+    <button class="tool-btn" id="btnGithubSave" style="background:#24292e;color:#fff;border-color:#24292e;" title="GitHub에 저장 후 Vercel 자동 배포">🚀 저장 &amp; 배포</button>
+    <button class="tool-btn icon-btn" id="btnGithubSettings" title="GitHub 설정">⚙️</button>
     <button class="tool-btn icon-btn" id="btnExport" title="내보내기 (JSON 저장)">📥</button>
     <button class="tool-btn icon-btn" id="btnImport" title="불러오기 (JSON 가져오기)">📤</button>
     <input type="file" id="fileInput" accept=".json" style="display:none">
@@ -527,6 +529,32 @@ header{background:var(--panel);border-bottom:1px solid var(--border);padding:0 1
 <div class="select-mode-hint" id="selectHint">빈 곳 드래그로 범위 선택 · Shift+클릭으로 개별 추가 · Esc로 해제</div>
 <div class="toast" id="toast">장수연님을 좌석 null에 배정했습니다.</div>
 <div class="search-hint" id="searchHint"></div>
+
+<!-- GitHub 설정 모달 -->
+<div class="settings-overlay" id="githubSettingsOverlay">
+  <div class="settings-modal">
+    <h2>⚙️ GitHub 자동 배포 설정</h2>
+    <p>저장 &amp; 배포 버튼을 사용하려면 아래 정보를 입력해주세요.<br>입력한 정보는 이 브라우저에만 저장되며 외부로 전송되지 않습니다.</p>
+    <div class="settings-field">
+      <label>GitHub Token</label>
+      <input type="password" id="ghTokenInput" placeholder="ghp_xxxxxxxxxxxx">
+      <small>GitHub → Settings → Developer settings → Personal access tokens → repo 권한</small>
+    </div>
+    <div class="settings-field">
+      <label>GitHub 저장소 (owner/repo)</label>
+      <input type="text" id="ghRepoInput" placeholder="jangsooo/WEBTOON_Green-Factory" value="jangsooo/WEBTOON_Green-Factory">
+    </div>
+    <div class="settings-field">
+      <label>파일 경로</label>
+      <input type="text" id="ghPathInput" placeholder="index.html" value="index.html">
+    </div>
+    <div class="settings-status" id="ghSettingsStatus"></div>
+    <div class="settings-actions">
+      <button class="btn-cancel" id="btnGithubSettingsCancel">취소</button>
+      <button class="btn-save" id="btnGithubSettingsSave">저장</button>
+    </div>
+  </div>
+</div>
 
 
 <script>
@@ -2595,6 +2623,112 @@ undoIndex = 0;
 renderAll();
 renderVersionDropdown();
 updateUndoBtn();
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  GITHUB 자동 배포
+// ─────────────────────────────────────────────────────────────────────────────
+const GH_TOKEN_KEY = 'gf_gh_token';
+const GH_REPO_KEY  = 'gf_gh_repo';
+const GH_PATH_KEY  = 'gf_gh_path';
+
+// 설정 모달 열기
+document.getElementById('btnGithubSettings').addEventListener('click', ()=>{
+  const overlay = document.getElementById('githubSettingsOverlay');
+  document.getElementById('ghTokenInput').value = localStorage.getItem(GH_TOKEN_KEY) || '';
+  document.getElementById('ghRepoInput').value  = localStorage.getItem(GH_REPO_KEY)  || 'jangsooo/WEBTOON_Green-Factory';
+  document.getElementById('ghPathInput').value  = localStorage.getItem(GH_PATH_KEY)  || 'index.html';
+  document.getElementById('ghSettingsStatus').className = 'settings-status';
+  overlay.classList.add('open');
+});
+
+document.getElementById('btnGithubSettingsCancel').addEventListener('click', ()=>{
+  document.getElementById('githubSettingsOverlay').classList.remove('open');
+});
+
+document.getElementById('btnGithubSettingsSave').addEventListener('click', ()=>{
+  const token = document.getElementById('ghTokenInput').value.trim();
+  const repo  = document.getElementById('ghRepoInput').value.trim();
+  const path  = document.getElementById('ghPathInput').value.trim() || 'index.html';
+  const st    = document.getElementById('ghSettingsStatus');
+  if(!token){ st.className='settings-status err'; st.textContent='Token을 입력해주세요.'; return; }
+  if(!repo || !repo.includes('/')){ st.className='settings-status err'; st.textContent='저장소를 owner/repo 형식으로 입력해주세요.'; return; }
+  localStorage.setItem(GH_TOKEN_KEY, token);
+  localStorage.setItem(GH_REPO_KEY,  repo);
+  localStorage.setItem(GH_PATH_KEY,  path);
+  st.className='settings-status ok'; st.textContent='✅ 저장 완료! 이제 저장 & 배포 버튼을 사용할 수 있어요.';
+  setTimeout(()=> document.getElementById('githubSettingsOverlay').classList.remove('open'), 1200);
+});
+
+// 저장 & 배포 버튼
+document.getElementById('btnGithubSave').addEventListener('click', async ()=>{
+  const token = localStorage.getItem(GH_TOKEN_KEY);
+  const repo  = localStorage.getItem(GH_REPO_KEY);
+  const path  = localStorage.getItem(GH_PATH_KEY) || 'index.html';
+
+  if(!token || !repo){
+    showToast('⚙️ 먼저 GitHub 설정을 완료해주세요!');
+    document.getElementById('githubSettingsOverlay').classList.add('open');
+    return;
+  }
+
+  const btn = document.getElementById('btnGithubSave');
+  btn.textContent = '⏳ 배포 중...';
+  btn.disabled = true;
+
+  try {
+    // 1) 현재 HTML 생성 (Share와 동일)
+    const payload = {seatData, depts, nextDeptId, floorSeats, floorZones, savedAt: new Date().toISOString()};
+    const dataJson = JSON.stringify(payload).replace(/<\/script>/gi, '<\/script>');
+    const injectScript = '<scr'+'ipt>window.__GF_EMBED__='+dataJson+';<'+'/script>';
+    let html = document.documentElement.outerHTML;
+    html = html.replace(/<script>window\.__GF_EMBED__[\s\S]*?<\/script>/i, '');
+    html = html.replace('</head>', injectScript + '
+</head>');
+    const fullHtml = '<!DOCTYPE html>
+' + html;
+
+    // 2) base64 인코딩
+    const encoded = btoa(unescape(encodeURIComponent(fullHtml)));
+
+    // 3) 현재 파일의 SHA 가져오기 (업데이트에 필요)
+    const apiBase = 'https://api.github.com/repos/' + repo + '/contents/' + path;
+    const headers = {
+      'Authorization': 'token ' + token,
+      'Content-Type': 'application/json',
+      'Accept': 'application/vnd.github.v3+json'
+    };
+
+    let sha = null;
+    const getRes = await fetch(apiBase, { headers });
+    if(getRes.ok){
+      const getData = await getRes.json();
+      sha = getData.sha;
+    }
+
+    // 4) GitHub에 파일 업데이트
+    const now = new Date().toLocaleString('ko-KR');
+    const body = { message: '좌석 배치 업데이트 (' + now + ')', content: encoded };
+    if(sha) body.sha = sha;
+
+    const putRes = await fetch(apiBase, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify(body)
+    });
+
+    if(putRes.ok){
+      showToast('🚀 GitHub 업로드 완료! Vercel 배포 중... (약 30초 소요)');
+    } else {
+      const err = await putRes.json();
+      showToast('❌ 오류: ' + (err.message || '알 수 없는 오류'));
+    }
+  } catch(e) {
+    showToast('❌ 네트워크 오류: ' + e.message);
+  } finally {
+    btn.textContent = '🚀 저장 & 배포';
+    btn.disabled = false;
+  }
+});
 </script>
 
 
